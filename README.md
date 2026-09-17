@@ -1,4 +1,5 @@
-# otel-infra — local Kubernetes + EDOT observability demo
+# nodejs-eshop-otel-demo-k8s-kind
+ — local Kubernetes + EDOT observability demo
 
 Two Node.js services (`frontend` → `backend`) on a local kind cluster, auto-instrumented with
 OpenTelemetry by the OTel Operator (zero code changes), exporting traces/metrics/logs

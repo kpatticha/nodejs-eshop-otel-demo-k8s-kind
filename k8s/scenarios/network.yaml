@@ -1,0 +1,56 @@
+# Scenario: network
+#
+# A real load generator service (services/loadgen), the same role the upstream
+# OpenTelemetry demo gives its own loadgenerator. It calls every other demo
+# service on a fixed interval.
+#
+# Every pod already emits k8s.pod.network.io and k8s.pod.network.errors with
+# attributes.direction = receive | transmit, which the Elasticsearch exporter
+# stores as one document per direction. What this scenario adds is *movement*:
+# steady, non-zero, clearly asymmetric byte counts on both this pod and the
+# pods it calls, instead of counters that never change.
+#
+# It also drives the CPU-bound /api/report endpoint, which is what keeps the
+# cpu_limit_utilization values in the other scenarios off the floor.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: network
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    app: network
+    scenario: network
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: network
+  template:
+    metadata:
+      labels:
+        app: network
+        scenario: network
+    spec:
+      containers:
+        - name: loadgen
+          image: nodejs-eshop-otel-demo-loadgen:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            # Targets that do not exist are simply counted as failures, so this
+            # works whether or not the other scenarios are applied.
+            - name: TARGETS
+              value: >-
+                http://frontend:8080/,
+                http://frontend:8080/checkout,
+                http://pod-with-limits:8081/api/report?ms=100,
+                http://pod-without-limits:8081/api/report?ms=100,
+                http://pod-multi-container:8080/api/report?ms=100
+            - name: INTERVAL_MS
+              value: "1000"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

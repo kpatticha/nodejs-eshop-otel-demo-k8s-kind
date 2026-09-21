@@ -25,7 +25,10 @@ kubectl get nodes
 echo "==> Build images"
 docker build -t "$CLUSTER-backend:$TAG" services/backend
 docker build -t "$CLUSTER-frontend:$TAG" services/frontend
-kind load docker-image "$CLUSTER-backend:$TAG" "$CLUSTER-frontend:$TAG" --name "$CLUSTER"
+docker build -t "$CLUSTER-loadgen:$TAG" services/loadgen
+kind load docker-image \
+  "$CLUSTER-backend:$TAG" "$CLUSTER-frontend:$TAG" "$CLUSTER-loadgen:$TAG" \
+  --name "$CLUSTER"
 
 echo "==> Deploy"
 kubectl apply -f k8s/namespace.yaml -f k8s/backend.yaml -f k8s/frontend.yaml
@@ -37,3 +40,4 @@ kubectl -n "$NAMESPACE" rollout status deployment/frontend --timeout=120s
 kubectl -n "$NAMESPACE" get pods
 echo
 echo "Done. Next: runbook step 5 (install EDOT from the Kibana onboarding page)."
+echo "Optional: ./scripts/scenarios.sh apply   (kubeletstats test scenarios, see SCENARIOS.md)"

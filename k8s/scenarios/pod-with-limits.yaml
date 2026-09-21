@@ -1,0 +1,70 @@
+# Scenario: pod-with-limits
+#
+# A fully specified workload: CPU *and* memory, requests *and* limits.
+# kubeletstats only emits these fields when the corresponding limit/request is
+# set, so this is the pod that populates:
+#   k8s.container.cpu_limit_utilization      k8s.pod.cpu_limit_utilization
+#   k8s.container.memory_limit_utilization   k8s.pod.memory_limit_utilization
+#   k8s.container.cpu_request_utilization    k8s.container.memory_request_utilization
+#
+# Apply the `network` scenario alongside it: the load generator calls the
+# CPU-bound /api/report endpoint here, which keeps CPU utilization at a
+# visible fraction of the limit instead of flat zero.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-with-limits
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    app: pod-with-limits
+    scenario: pod-with-limits
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pod-with-limits
+  template:
+    metadata:
+      labels:
+        app: pod-with-limits
+        scenario: pod-with-limits
+      annotations:
+        instrumentation.opentelemetry.io/inject-nodejs: "opentelemetry-operator-system/elastic-instrumentation"
+    spec:
+      containers:
+        - name: app
+          image: nodejs-eshop-otel-demo-backend:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pod-with-limits
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              # 200m makes the CPU load from /api/report land around half the
+              # limit. 256Mi leaves Node comfortable headroom (128Mi risks OOM).
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pod-with-limits
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    scenario: pod-with-limits
+spec:
+  selector:
+    app: pod-with-limits
+  ports:
+    - port: 8081
+      targetPort: 8081

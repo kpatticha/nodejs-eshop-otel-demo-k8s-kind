@@ -1,0 +1,123 @@
+# Scenario: pod-multi-container
+#
+# A genuine sidecar pod: the application container plus an nginx reverse proxy
+# in front of it (the "ambassador" pattern). The proxy is the only thing the
+# Service exposes; it forwards to the app over the pod's loopback interface.
+#
+# kubeletstats emits one k8s.container.* document set per container, so this
+# pod yields two container names (proxy, app) under a single k8s.pod.name.
+# Both containers carry requests and limits, which is what a real production
+# pod looks like.
+#
+# Note: proxy-to-app traffic goes over loopback and therefore does NOT appear
+# in the pod network counters. Use the `network` scenario for those.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pod-multi-container-proxy
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    scenario: pod-multi-container
+data:
+  default.conf: |
+    server {
+        listen 8080;
+        server_name _;
+
+        # Served by the proxy itself so the probe does not depend on the app.
+        location = /healthz {
+            access_log off;
+            add_header Content-Type text/plain;
+            return 200 "ok\n";
+        }
+
+        location / {
+            proxy_pass http://127.0.0.1:8081;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-multi-container
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    app: pod-multi-container
+    scenario: pod-multi-container
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pod-multi-container
+  template:
+    metadata:
+      labels:
+        app: pod-multi-container
+        scenario: pod-multi-container
+      annotations:
+        instrumentation.opentelemetry.io/inject-nodejs: "opentelemetry-operator-system/elastic-instrumentation"
+        # Only the Node.js container should be instrumented, not the proxy.
+        instrumentation.opentelemetry.io/container-names: "app"
+    spec:
+      containers:
+        - name: proxy
+          image: nginx:1.27-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: proxy-config
+              mountPath: /etc/nginx/conf.d
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+        - name: app
+          image: nodejs-eshop-otel-demo-backend:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pod-multi-container
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+      volumes:
+        - name: proxy-config
+          configMap:
+            name: pod-multi-container-proxy
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pod-multi-container
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    scenario: pod-multi-container
+spec:
+  selector:
+    app: pod-multi-container
+  ports:
+    - port: 8080
+      targetPort: 8080

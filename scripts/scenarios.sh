@@ -62,7 +62,7 @@ ensure_image_proxy() {
 
 ensure_images_for() {
   case "$1" in
-    network) ensure_image_loadgen ;;
+    network|pod-churn) ensure_image_loadgen ;;
     pod-multi-container) ensure_image_proxy ;;
   esac
 }
@@ -108,12 +108,20 @@ case "$ACTION" in
       kubectl apply -f "$file"
     done
 
-    # Pick up a freshly rebuilt image when the deployment already exists.
+    # Pick up a freshly rebuilt image when the deployment already exists. Not
+    # every scenario has a Deployment named after it, so skip the ones that
+    # don't rather than failing.
     for name in $SCENARIOS; do
-      kubectl -n "$NAMESPACE" rollout restart "deployment/$name" >/dev/null
+      if kubectl -n "$NAMESPACE" get "deployment/$name" >/dev/null 2>&1; then
+        kubectl -n "$NAMESPACE" rollout restart "deployment/$name" >/dev/null
+      fi
     done
     for name in $SCENARIOS; do
-      kubectl -n "$NAMESPACE" rollout status "deployment/$name" --timeout=180s
+      if kubectl -n "$NAMESPACE" get "deployment/$name" >/dev/null 2>&1; then
+        kubectl -n "$NAMESPACE" rollout status "deployment/$name" --timeout=180s
+      else
+        echo "$name: no deployment of that name, nothing to wait for"
+      fi
     done
 
     echo

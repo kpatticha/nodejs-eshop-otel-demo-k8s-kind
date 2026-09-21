@@ -5,9 +5,14 @@
 // instead of flat-lining at zero. No OpenTelemetry code here either.
 //
 // Configuration (env):
-//   TARGETS      comma-separated URLs; one request per URL per tick
-//   INTERVAL_MS  milliseconds between ticks (default 1000)
-//   REPORT_MS    milliseconds between summary log lines (default 30000)
+//   TARGETS        comma-separated URLs; one request per URL per tick
+//   INTERVAL_MS    milliseconds between ticks (default 1000)
+//   REPORT_MS      milliseconds between summary log lines (default 30000)
+//   EXIT_AFTER_MS  run for this long, then exit 0 (default: run forever)
+//
+// EXIT_AFTER_MS is what makes this usable as a Job or CronJob container: the
+// pod does real work, completes, and goes away, which is where pod churn
+// comes from.
 
 const TARGETS = (process.env.TARGETS || 'http://frontend:8080/')
   .split(',')
@@ -15,6 +20,7 @@ const TARGETS = (process.env.TARGETS || 'http://frontend:8080/')
   .filter(Boolean);
 const INTERVAL_MS = Number(process.env.INTERVAL_MS) || 1000;
 const REPORT_MS = Number(process.env.REPORT_MS) || 30000;
+const EXIT_AFTER_MS = Number(process.env.EXIT_AFTER_MS) || 0;
 
 const stats = new Map(TARGETS.map((t) => [t, { ok: 0, failed: 0 }]));
 
@@ -45,9 +51,21 @@ setInterval(() => {
   }
 }, INTERVAL_MS);
 
-setInterval(() => {
-  const summary = [...stats.entries()]
+function summarise() {
+  return [...stats.entries()]
     .map(([url, s]) => `${url} ok=${s.ok} failed=${s.failed}`)
     .join(' | ');
-  console.log(summary);
+}
+
+setInterval(() => {
+  console.log(summarise());
 }, REPORT_MS);
+
+if (EXIT_AFTER_MS > 0) {
+  console.log(`loadgen: will exit after ${EXIT_AFTER_MS}ms`);
+  setTimeout(() => {
+    console.log(summarise());
+    console.log('loadgen: done');
+    process.exit(0);
+  }, EXIT_AFTER_MS);
+}

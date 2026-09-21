@@ -1,0 +1,124 @@
+# Scenario: pod-churn
+#
+# Pods that come and go, which is what most static demos never produce. Two
+# sources of churn, because they exercise different things:
+#
+# 1. The `pod-churn` Deployment is a normal service, sized like a real one. It
+#    is the thing ./scripts/churn.sh scales up and down, which moves the
+#    desired/available replica counts in metrics-k8sclusterreceiver.otel-* and
+#    starts and stops whole sets of kubeletstats series.
+#
+# 2. The `pod-churn-reindex` CronJob runs every minute, works for 40 seconds,
+#    then completes. Every run is a brand new pod name that appears, reports
+#    metrics for under a minute, and disappears. This is the hands-off churn:
+#    it keeps happening with no terminal attached.
+#
+# Together they test series lifecycle: new dimension values arriving, old
+# series going stale, and charts that must show gaps rather than zeros.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-churn
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    app: pod-churn
+    scenario: pod-churn
+spec:
+  # churn.sh scales this; re-applying the scenario resets it to 1.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pod-churn
+  template:
+    metadata:
+      labels:
+        app: pod-churn
+        scenario: pod-churn
+      annotations:
+        instrumentation.opentelemetry.io/inject-nodejs: "opentelemetry-operator-system/elastic-instrumentation"
+    spec:
+      # Short grace period so scaling down churns quickly instead of waiting.
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: app
+          image: nodejs-eshop-otel-demo-backend:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pod-churn
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pod-churn
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    scenario: pod-churn
+spec:
+  selector:
+    app: pod-churn
+  ports:
+    - port: 8081
+      targetPort: 8081
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pod-churn-reindex
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    scenario: pod-churn
+spec:
+  schedule: "* * * * *"
+  # Don't pile up runs if one is slow, and keep history short so finished pods
+  # are garbage collected instead of accumulating.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  startingDeadlineSeconds: 30
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 60
+      template:
+        metadata:
+          labels:
+            app: pod-churn-reindex
+            scenario: pod-churn
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: reindex
+              image: nodejs-eshop-otel-demo-loadgen:1.0.0
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: TARGETS
+                  value: >-
+                    http://pod-churn:8081/api/report?ms=100,
+                    http://frontend:8080/
+                - name: INTERVAL_MS
+                  value: "500"
+                # Finish well inside the one-minute schedule.
+                - name: EXIT_AFTER_MS
+                  value: "40000"
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi

@@ -5,16 +5,13 @@ OpenTelemetry by the OTel Operator (zero code changes), exporting traces/metrics
 to Elastic via the EDOT collectors installed with the `opentelemetry-kube-stack`
 Helm chart.
 
-**Start here → [RUN_DEMO_SERVICES.md](RUN_DEMO_SERVICES.md)** — five steps, ~10 minutes
-(`./scripts/setup.sh` → Kibana onboarding flow → `./scripts/traffic.sh` → verify).
-[MANUAL.md](MANUAL.md) is the same thing expanded into every individual
-`kind` / `docker` / `kubectl` / `helm` command, for when you want to run them
-yourself or debug a step.
+## Steps
 
-**Developing against a remote cluster →
-[REMOTE_ES_ELASTIC_AGENT_LOCAL_KIBANA.md](REMOTE_ES_ELASTIC_AGENT_LOCAL_KIBANA.md)**:
-create an `oblt-cli` cross-cluster-search cluster, run Kibana locally against it,
-and ingest this demo's data into it.
+**1. Set up remote Elasticsearch and Local Kibana
+[REMOTE_ES_ELASTIC_AGENT_LOCAL_KIBANA.md](REMOTE_ES_ELASTIC_AGENT_LOCAL_KIBANA.md)**
+
+**2. Run frontend and backend service on k8s kind cluster:
+[RUN_DEMO_SERVICES.md](RUN_DEMO_SERVICES.md)**
 
 ## Layout
 

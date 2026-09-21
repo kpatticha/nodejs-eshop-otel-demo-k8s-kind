@@ -90,6 +90,19 @@ In Kibana:
 - **Infrastructure / Kubernetes dashboards** — node and pod metrics, container logs.
 - The onboarding page itself detects your incoming data.
 
+## 6. Optional: shape the Kubernetes metrics
+
+The two base pods look identical to a monitoring UI, and leave many kubeletstats
+fields empty. To get pods with and without resource limits, a multi-container pod, and
+steady network counters:
+
+```bash
+./scripts/scenarios.sh apply
+```
+
+Each scenario can be applied or removed on its own. See [SCENARIOS.md](SCENARIOS.md)
+for what each produces and the queries to verify it.
+
 ## Troubleshooting
 
 | Symptom                                                                       | Fix                                                                                                                                                                                |

@@ -1,0 +1,10 @@
+{
+  "name": "loadgen",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Steady HTTP traffic generator for the kubeletstats demo scenarios",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  }
+}

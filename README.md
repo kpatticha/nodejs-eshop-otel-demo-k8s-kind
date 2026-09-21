@@ -13,16 +13,23 @@ Helm chart.
 **2. Run frontend and backend service on k8s kind cluster:
 [RUN_DEMO_SERVICES.md](RUN_DEMO_SERVICES.md)**
 
+**3. Optional — apply extra workload scenarios to shape the kubeletstats metrics:
+[SCENARIOS.md](SCENARIOS.md)**
+
 ## Layout
 
 - `kind.yaml` — cluster config with a pinned Kubernetes node image
 - `scripts/setup.sh` — create cluster + build/load images + deploy (idempotent)
 - `scripts/traffic.sh` — port-forward the frontend and send demo traffic
+- `scripts/scenarios.sh` — apply/remove the optional metric scenarios
 - `services/frontend` — entry service (port 8080), calls the backend over HTTP
 - `services/backend` — product API (port 8081), includes a deliberately flaky
-  endpoint to produce error traces
+  endpoint to produce error traces and a CPU-bound one to move utilization
+- `services/loadgen` — steady traffic generator used by the `network` scenario
 - `k8s/` — namespace + deployments/services, with the
   `instrumentation.opentelemetry.io/inject-nodejs` annotation already in place
+- `k8s/scenarios/` — optional workloads, one per metric shape (see
+  [SCENARIOS.md](SCENARIOS.md))
 
 Neither service contains any OpenTelemetry code — instrumentation is injected at
 pod creation by the operator.

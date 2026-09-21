@@ -2,17 +2,19 @@
 # Generates demo traffic against the frontend (runbook step 7).
 # Handles the port-forward itself, so you only need one terminal.
 # Usage: ./scripts/traffic.sh [requests]   (default 50)
+#        TARGET=pod-multi-container ./scripts/traffic.sh 100   (hit a scenario service instead)
 set -euo pipefail
 
 NAMESPACE=nodejs-eshop-otel-demo
 PORT=${PORT:-18080}
+TARGET=${TARGET:-frontend}   # name of a Service/Deployment exposing port 8080
 REQUESTS=${1:-50}
 
 command -v kubectl >/dev/null || { echo "missing required command: kubectl" >&2; exit 1; }
 
-kubectl -n "$NAMESPACE" rollout status deployment/frontend --timeout=120s
+kubectl -n "$NAMESPACE" rollout status "deployment/$TARGET" --timeout=120s
 
-kubectl -n "$NAMESPACE" port-forward "svc/frontend" "$PORT:8080" >/dev/null 2>&1 &
+kubectl -n "$NAMESPACE" port-forward "svc/$TARGET" "$PORT:8080" >/dev/null 2>&1 &
 PF_PID=$!
 trap 'kill "$PF_PID" 2>/dev/null || true' EXIT
 

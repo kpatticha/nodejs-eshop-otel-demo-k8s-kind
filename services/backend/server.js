@@ -1,6 +1,7 @@
 // Backend service: owns the "product catalog". No OpenTelemetry code here —
 // the OTel Operator injects the Node.js auto-instrumentation at pod startup.
 const express = require('express');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 8081;
@@ -38,6 +39,23 @@ app.get('/api/flaky', async (_req, res) => {
     return res.status(500).json({ error: 'simulated backend failure' });
   }
   res.json({ ok: true });
+});
+
+// CPU-bound endpoint ("recompute the sales report"). Unlike the endpoints above,
+// which mostly sleep, this one actually burns CPU, so the kubeletstats
+// cpu_limit_utilization / cpu_request_utilization values are visibly non-zero.
+// Capped so a stray request can't peg the container indefinitely.
+app.get('/api/report', (req, res) => {
+  const requested = Number(req.query.ms);
+  const ms = Math.min(Number.isFinite(requested) && requested > 0 ? requested : 50, 500);
+  const deadline = Date.now() + ms;
+  let rounds = 0;
+  while (Date.now() < deadline) {
+    // Re-hash a fresh digest each round so the work can't be optimised away.
+    crypto.createHash('sha256').update(String(rounds)).digest('hex');
+    rounds += 1;
+  }
+  res.json({ ms, rounds });
 });
 
 app.listen(PORT, () => {

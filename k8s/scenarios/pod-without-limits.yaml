@@ -1,0 +1,59 @@
+# Scenario: pod-without-limits
+#
+# The workload nobody ever got around to sizing: no resources block at all,
+# so neither requests nor limits are set. Very common in real clusters.
+#
+# kubeletstats still emits plain usage metrics (k8s.container.cpu.usage,
+# k8s.pod.memory.usage, ...) but none of the *_limit_utilization or
+# *_request_utilization fields, because there is no denominator. That absence
+# is the thing this scenario exists to test.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-without-limits
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    app: pod-without-limits
+    scenario: pod-without-limits
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pod-without-limits
+  template:
+    metadata:
+      labels:
+        app: pod-without-limits
+        scenario: pod-without-limits
+      annotations:
+        instrumentation.opentelemetry.io/inject-nodejs: "opentelemetry-operator-system/elastic-instrumentation"
+    spec:
+      containers:
+        - name: app
+          image: nodejs-eshop-otel-demo-backend:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pod-without-limits
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 3
+          # Deliberately no resources block.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pod-without-limits
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    scenario: pod-without-limits
+spec:
+  selector:
+    app: pod-without-limits
+  ports:
+    - port: 8081
+      targetPort: 8081

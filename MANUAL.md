@@ -1,12 +1,11 @@
-# Runbook — Kubernetes observability with OpenTelemetry (EDOT) on kind
+# Manual runbook — every command, one at a time
 
-Run two Node.js demo services on a local Kubernetes cluster (kind), auto-instrument
-them with OpenTelemetry (zero code changes), and ingest traces, metrics, and logs
-into Elastic using the **Elastic Distribution of the OTel Collector (EDOT)**.
+This is the long form of [RUN_DEMO_SERVICES.md](RUN_DEMO_SERVICES.md). Same result, but you run each
+command yourself instead of the scripts. Use it when you want to understand each step,
+or when something broke and you need to poke at it.
 
-No custom scripts — every step is a standard `kind` / `docker` / `kubectl` / `helm`
-command, and the Elastic-specific commands are copied from your own Kibana
-onboarding page.
+Every step is a standard `kind` / `docker` / `kubectl` / `helm` command, and the
+Elastic-specific commands are copied from your own Kibana onboarding page.
 
 ```
 request → frontend ──HTTP──▶ backend          (distributed trace)
@@ -32,7 +31,8 @@ Run **all remaining commands from the repo root** — every path below is relati
 to it:
 
 ```bash
-git clone <this-repo-url> otel-infra && cd otel-infra
+git clone https://github.com/kpatticha/nodejs-eshop-otel-demo-k8s-kind.git
+cd nodejs-eshop-otel-demo-k8s-kind
 ```
 
 ## 3. Create the cluster
@@ -175,7 +175,7 @@ fails ~30% of the time by design so you also get error traces.
 
 | Symptom | Fix |
 |---|---|
-| `the path "k8s/..." does not exist` | You're not in the repo root — `cd` into the cloned `otel-infra` directory |
+| `the path "k8s/..." does not exist` | You're not in the repo root — `cd` into the cloned `nodejs-eshop-otel-demo-k8s-kind` directory |
 | Cluster misbehaving, apiserver unreachable | `kind delete cluster --name nodejs-eshop-otel-demo`, then recreate from step 3 |
 | App pods `ErrImagePull` | Images weren't loaded into the node — rerun the `kind load docker-image ...` command |
 | No init container in app pods | `kubectl -n nodejs-eshop-otel-demo rollout restart deployment frontend backend` (webhook wasn't ready the first time) |

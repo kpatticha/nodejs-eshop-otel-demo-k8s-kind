@@ -67,6 +67,24 @@ ensure_images_for() {
   esac
 }
 
+# The workloads a scenario owns, wherever they live, as "kind namespace name"
+# lines. Found by the `scenario` label rather than by name, so a scenario can
+# own a StatefulSet, more than one workload, or objects in another namespace.
+workloads_for() {
+  local kind
+  for kind in deployment statefulset; do
+    kubectl get "$kind" --all-namespaces -l "scenario=$1" \
+      -o jsonpath="{range .items[*]}$kind {.metadata.namespace} {.metadata.name}{\"\n\"}{end}" 2>/dev/null
+  done
+}
+
+# Some scenarios are never meant to become ready (pod-crashloop), so waiting on
+# them would always time out. They opt out with an annotation on the workload.
+skips_wait() {
+  [ "$(kubectl -n "$1" get "$2/$3" \
+    -o jsonpath="{.metadata.annotations['scenario-no-wait']}" 2>/dev/null)" = "true" ]
+}
+
 ACTION=${1:-}
 shift || true
 
@@ -76,7 +94,9 @@ case "$ACTION" in
     exit 0
     ;;
   status)
-    kubectl -n "$NAMESPACE" get pods -l scenario -o wide
+    # --all-namespaces because `duplicate-pod-name` lives partly outside the
+    # demo namespace.
+    kubectl get pods --all-namespaces -l scenario -o wide
     exit 0
     ;;
   apply|delete) ;;
@@ -108,24 +128,32 @@ case "$ACTION" in
       kubectl apply -f "$file"
     done
 
-    # Pick up a freshly rebuilt image when the deployment already exists. Not
-    # every scenario has a Deployment named after it, so skip the ones that
-    # don't rather than failing.
+    # Pick up a freshly rebuilt image when the workload already exists. Not
+    # every scenario owns a restartable workload (a CronJob-only one would
+    # not), so say so rather than failing.
     for name in $SCENARIOS; do
-      if kubectl -n "$NAMESPACE" get "deployment/$name" >/dev/null 2>&1; then
-        kubectl -n "$NAMESPACE" rollout restart "deployment/$name" >/dev/null
-      fi
+      restarted=0
+      while read -r kind ns obj; do
+        [ -n "${obj:-}" ] || continue
+        restarted=1
+        kubectl -n "$ns" rollout restart "$kind/$obj" >/dev/null
+      done < <(workloads_for "$name")
+      [ "$restarted" = 1 ] || echo "$name: no Deployment or StatefulSet to restart"
     done
+
     for name in $SCENARIOS; do
-      if kubectl -n "$NAMESPACE" get "deployment/$name" >/dev/null 2>&1; then
-        kubectl -n "$NAMESPACE" rollout status "deployment/$name" --timeout=180s
-      else
-        echo "$name: no deployment of that name, nothing to wait for"
-      fi
+      while read -r kind ns obj; do
+        [ -n "${obj:-}" ] || continue
+        if skips_wait "$ns" "$kind" "$obj"; then
+          echo "$ns/$obj: never becomes ready by design, not waiting"
+          continue
+        fi
+        kubectl -n "$ns" rollout status "$kind/$obj" --timeout=180s
+      done < <(workloads_for "$name")
     done
 
     echo
-    kubectl -n "$NAMESPACE" get pods -l scenario
+    kubectl get pods --all-namespaces -l scenario
     echo
     echo "Metrics appear in metrics-kubeletstatsreceiver.otel-* within ~1 minute"
     echo "(the receiver's collection interval). Queries: SCENARIOS.md"

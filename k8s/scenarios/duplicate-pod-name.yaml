@@ -1,0 +1,151 @@
+# Scenario: duplicate-pod-name
+#
+# The same pod name in two different namespaces. This is the scenario that
+# catches anything keyed on k8s.pod.name alone: a pod is only identified by
+# namespace + name, and a UI, a query, or a group-by that forgets the namespace
+# will silently merge two unrelated workloads into one.
+#
+# A Deployment cannot do this — its pod names carry a random suffix — so both
+# copies are StatefulSets, whose pod names are deterministic. Both produce a
+# pod called exactly `duplicate-pod-name-0`, one in nodejs-eshop-otel-demo and
+# one in nodejs-eshop-otel-demo-2.
+#
+# The two copies are deliberately sized differently (128Mi vs 512Mi memory
+# limit, 200m vs 600m CPU limit). If something conflates them, the merged
+# numbers are visibly wrong rather than plausibly wrong, and
+# memory_limit_utilization for the same pod name differs between namespaces.
+#
+# This is also the only scenario that puts workloads outside the demo
+# namespace, which on its own tests that the collectors are not namespace
+# scoped. Deleting the scenario deletes the second namespace with it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nodejs-eshop-otel-demo-2
+  labels:
+    scenario: duplicate-pod-name
+---
+# Copy one: the demo namespace, tightly sized.
+apiVersion: v1
+kind: Service
+metadata:
+  name: duplicate-pod-name
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    scenario: duplicate-pod-name
+spec:
+  # Headless, as a StatefulSet's governing service must be.
+  clusterIP: None
+  selector:
+    app: duplicate-pod-name
+  ports:
+    - port: 8081
+      targetPort: 8081
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: duplicate-pod-name
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    app: duplicate-pod-name
+    scenario: duplicate-pod-name
+spec:
+  serviceName: duplicate-pod-name
+  replicas: 1
+  selector:
+    matchLabels:
+      app: duplicate-pod-name
+  template:
+    metadata:
+      labels:
+        app: duplicate-pod-name
+        scenario: duplicate-pod-name
+      annotations:
+        instrumentation.opentelemetry.io/inject-nodejs: "opentelemetry-operator-system/elastic-instrumentation"
+    spec:
+      containers:
+        - name: app
+          image: nodejs-eshop-otel-demo-backend:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          env:
+            # The pod name is identical across the two namespaces; the service
+            # name is not, so traces stay tellable apart.
+            - name: OTEL_SERVICE_NAME
+              value: duplicate-pod-name-demo
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+# Copy two: the second namespace, same pod name, roomier limits.
+apiVersion: v1
+kind: Service
+metadata:
+  name: duplicate-pod-name
+  namespace: nodejs-eshop-otel-demo-2
+  labels:
+    scenario: duplicate-pod-name
+spec:
+  clusterIP: None
+  selector:
+    app: duplicate-pod-name
+  ports:
+    - port: 8081
+      targetPort: 8081
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: duplicate-pod-name
+  namespace: nodejs-eshop-otel-demo-2
+  labels:
+    app: duplicate-pod-name
+    scenario: duplicate-pod-name
+spec:
+  serviceName: duplicate-pod-name
+  replicas: 1
+  selector:
+    matchLabels:
+      app: duplicate-pod-name
+  template:
+    metadata:
+      labels:
+        app: duplicate-pod-name
+        scenario: duplicate-pod-name
+      annotations:
+        # The Instrumentation resource is referenced across namespaces, so this
+        # works outside the demo namespace unchanged.
+        instrumentation.opentelemetry.io/inject-nodejs: "opentelemetry-operator-system/elastic-instrumentation"
+    spec:
+      containers:
+        - name: app
+          image: nodejs-eshop-otel-demo-backend:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: duplicate-pod-name-second
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 600m
+              memory: 512Mi

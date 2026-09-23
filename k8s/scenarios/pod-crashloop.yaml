@@ -1,0 +1,75 @@
+# Scenario: pod-crashloop
+#
+# A container that starts, works for a while, then exits non-zero. The kubelet
+# restarts it, the restart backoff doubles each time (10s, 20s, 40s, ... capped
+# at 5 minutes), and the pod settles into CrashLoopBackOff.
+#
+# Two things this produces that a healthy pod never does:
+#
+# 1. A rising k8s.container.restarts, and a pod that is Running-but-not-Ready,
+#    in metrics-k8sclusterreceiver.otel-*.
+# 2. Gaps in metrics-kubeletstatsreceiver.otel-*. While the pod sits in the
+#    backoff sleep there is no running container, so the k8s.container.*
+#    series stop and later resume. The k8s.pod.* series continue throughout.
+#    A chart over the container series has to render that as a gap, not a zero.
+#
+# Deliberately has no readinessProbe: the point is a pod that never becomes
+# ready, and a probe would only add a second reason for that.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-crashloop
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    app: pod-crashloop
+    scenario: pod-crashloop
+  annotations:
+    # This workload never becomes ready, so scenarios.sh must not wait for it.
+    scenario-no-wait: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pod-crashloop
+  template:
+    metadata:
+      labels:
+        app: pod-crashloop
+        scenario: pod-crashloop
+      # No instrumentation annotation: this container never runs the app, so
+      # injecting the Node.js agent would only add an init container to it.
+    spec:
+      # Nothing to drain, and a crashing pod should be replaced promptly.
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: app
+          image: nodejs-eshop-otel-demo-backend:1.0.0
+          imagePullPolicy: IfNotPresent
+          # Burn a little CPU and hold some memory so the container reports
+          # non-trivial usage while it is alive, then fail.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "pod-crashloop: starting, will fail in ${RUN_SECONDS}s"
+              node -e '
+                const held = Buffer.alloc(32 * 1024 * 1024, 1);
+                const until = Date.now() + Number(process.env.RUN_SECONDS) * 1000;
+                (function spin() {
+                  const slice = Date.now() + 50;
+                  while (Date.now() < slice) {}
+                  if (Date.now() < until) setTimeout(spin, 150);
+                  else { console.error("pod-crashloop: fatal: simulated crash"); process.exit(1); }
+                })();
+              '
+          env:
+            # Long enough that kubeletstats (60s interval) catches it running
+            # at least sometimes, short enough to reach deep backoff quickly.
+            - name: RUN_SECONDS
+              value: "45"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

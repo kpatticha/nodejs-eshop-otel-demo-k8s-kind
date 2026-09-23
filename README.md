@@ -22,6 +22,8 @@ Helm chart.
 - `scripts/setup.sh` — create cluster + build/load images + deploy (idempotent)
 - `scripts/traffic.sh` — port-forward the frontend and send demo traffic
 - `scripts/scenarios.sh` — apply/remove the optional metric scenarios
+- `scripts/churn.sh` — scale a deployment up and down to produce pod churn
+- `scripts/kill-pod.sh` — delete a pod and let its controller replace it
 - `services/frontend` — entry service (port 8080), calls the backend over HTTP
 - `services/backend` — product API (port 8081), includes a deliberately flaky
   endpoint to produce error traces and a CPU-bound one to move utilization

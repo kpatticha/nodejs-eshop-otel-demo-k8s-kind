@@ -44,7 +44,9 @@ spec:
                 http://frontend:8080/checkout,
                 http://pod-with-limits:8081/api/report?ms=100,
                 http://pod-without-limits:8081/api/report?ms=100,
-                http://pod-multi-container:8080/api/report?ms=100
+                http://pod-multi-container:8080/api/report?ms=100,
+                http://duplicate-pod-name:8081/api/report?ms=100,
+                http://duplicate-pod-name.nodejs-eshop-otel-demo-2:8081/api/report?ms=50
             - name: INTERVAL_MS
               value: "1000"
           resources:

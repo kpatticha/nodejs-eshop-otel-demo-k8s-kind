@@ -16,6 +16,9 @@ Helm chart.
 **3. Optional — apply extra workload scenarios to shape the kubeletstats metrics:
 [SCENARIOS.md](SCENARIOS.md)**
 
+**4. Optional: Run demo services integrating with Elastic APM and Elastic Agent [repo](https://github.com/kpatticha/nodejs-eshop-ecs-demo-k8s-kind)** 
+  - Using the two demos to report to the same Elasticsearch instance would allow us to have both schemas. 
+ 
 ## Layout
 
 - `kind.yaml` — cluster config with a pinned Kubernetes node image

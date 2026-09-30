@@ -1,0 +1,257 @@
+# Scenario: pod-multi-interface
+#
+# Two pods that each have a *second* network interface, and real traffic on
+# both of them. This is the multi-homed pod: rare, but it happens wherever
+# Multus is in play (telco/NFV, storage networks, dedicated management NICs).
+#
+# It exists to produce k8s.pod.network.io and k8s.pod.network.errors documents
+# where a single k8s.pod.uid carries two distinct attributes.interface values
+# (eth0 and net1), both with non-trivial receive *and* transmit bytes. Every
+# other scenario in this repo only ever reports eth0, so anything that assumes
+# one interface per pod — a chart that sums across documents, a tile that shows
+# "the" network rate — looks right until this scenario is applied.
+#
+# Two prerequisites, neither of which this file can carry (see SCENARIOS.md):
+#
+#   1. Multus, for the second interface:  ./scripts/multus.sh install
+#      (scenarios.sh runs this for you before applying this scenario)
+#   2. The kubeletstats receiver, which reports only the pod's *default*
+#      interface unless told otherwise:   ./scripts/collector-interfaces.sh enable
+#
+# Without 2 the pods really do have two interfaces, but the collector only ever
+# emits eth0 — the scenario fails silently. Check with the ES|QL query in
+# SCENARIOS.md, not with `kubectl exec ... ip addr`.
+#
+# The secondary network is a node-local Linux bridge (multinic0) with isGateway
+# false, so the default route stays on eth0 and nothing about cluster networking
+# changes. Each pod gets a static address so its peer can be named without
+# service discovery: traffic to 10.244.200.1x goes over net1 (the bridge's
+# connected route), traffic to the ClusterIP goes over eth0.
+#
+# That subnet is deliberate. kind's masq-agent masquerades anything destined
+# outside the cluster CIDR (10.244.0.0/16) to the node's own address, which
+# silently breaks a bridge-local conversation: the SYN arrives from the node IP
+# and the connection never completes. 10.244.200.0/24 sits inside the cluster
+# CIDR, so it is exempt, and well clear of the /24 the node hands to kindnet.
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: pod-multi-interface-a
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    scenario: pod-multi-interface
+spec:
+  config: |
+    {
+      "cniVersion": "1.0.0",
+      "name": "pod-multi-interface-a",
+      "type": "bridge",
+      "bridge": "multinic0",
+      "isGateway": false,
+      "ipam": {
+        "type": "static",
+        "addresses": [{ "address": "10.244.200.11/24" }]
+      }
+    }
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: pod-multi-interface-b
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    scenario: pod-multi-interface
+spec:
+  config: |
+    {
+      "cniVersion": "1.0.0",
+      "name": "pod-multi-interface-b",
+      "type": "bridge",
+      "bridge": "multinic0",
+      "isGateway": false,
+      "ipam": {
+        "type": "static",
+        "addresses": [{ "address": "10.244.200.12/24" }]
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-multi-interface-a
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    app: pod-multi-interface
+    peer: a
+    scenario: pod-multi-interface
+spec:
+  replicas: 1
+  # Static addresses are handed out by the CNI plugin, which has no way to know
+  # one is already in use. A rolling update briefly runs two pods claiming the
+  # same address on the same bridge, and the secondary network stops working
+  # for both. Recreate keeps the address unique.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pod-multi-interface
+      peer: a
+  template:
+    metadata:
+      labels:
+        app: pod-multi-interface
+        peer: a
+        scenario: pod-multi-interface
+      annotations:
+        instrumentation.opentelemetry.io/inject-nodejs: "opentelemetry-operator-system/elastic-instrumentation"
+        # The @net1 suffix names the interface inside the pod. Do not call it
+        # veth*, lo* or docker* — cadvisor drops those by prefix, so the kubelet
+        # would never report it and the whole scenario would produce nothing.
+        k8s.v1.cni.cncf.io/networks: pod-multi-interface-a@net1
+    spec:
+      containers:
+        - name: app
+          image: nodejs-eshop-otel-demo-backend:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pod-multi-interface-a
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+        # Each pod is both client and server on both interfaces, which is what
+        # keeps receive and transmit non-trivial on each of them. The peer is
+        # called twice: once by secondary IP (over net1), once by Service name
+        # (over eth0). /api/products returns a real payload and the generator
+        # reads the response body, so bytes move in both directions.
+        - name: loadgen
+          image: nodejs-eshop-otel-demo-loadgen:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TARGETS
+              value: >-
+                http://10.244.200.12:8081/api/products,
+                http://pod-multi-interface-b:8081/api/products
+            - name: INTERVAL_MS
+              value: "500"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pod-multi-interface-b
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    app: pod-multi-interface
+    peer: b
+    scenario: pod-multi-interface
+spec:
+  replicas: 1
+  # Static addresses are handed out by the CNI plugin, which has no way to know
+  # one is already in use. A rolling update briefly runs two pods claiming the
+  # same address on the same bridge, and the secondary network stops working
+  # for both. Recreate keeps the address unique.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pod-multi-interface
+      peer: b
+  template:
+    metadata:
+      labels:
+        app: pod-multi-interface
+        peer: b
+        scenario: pod-multi-interface
+      annotations:
+        instrumentation.opentelemetry.io/inject-nodejs: "opentelemetry-operator-system/elastic-instrumentation"
+        k8s.v1.cni.cncf.io/networks: pod-multi-interface-b@net1
+    spec:
+      containers:
+        - name: app
+          image: nodejs-eshop-otel-demo-backend:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          env:
+            - name: OTEL_SERVICE_NAME
+              value: pod-multi-interface-b
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+        - name: loadgen
+          image: nodejs-eshop-otel-demo-loadgen:1.0.0
+          imagePullPolicy: IfNotPresent
+          env:
+            # Deliberately busier than a's, so the two pods are asymmetric and
+            # a view that mixes them up is visibly wrong rather than plausible.
+            - name: TARGETS
+              value: >-
+                http://10.244.200.11:8081/api/products,
+                http://10.244.200.11:8081/api/products/1,
+                http://pod-multi-interface-a:8081/api/products
+            - name: INTERVAL_MS
+              value: "500"
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pod-multi-interface-a
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    scenario: pod-multi-interface
+spec:
+  selector:
+    app: pod-multi-interface
+    peer: a
+  ports:
+    - port: 8081
+      targetPort: 8081
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pod-multi-interface-b
+  namespace: nodejs-eshop-otel-demo
+  labels:
+    scenario: pod-multi-interface
+spec:
+  selector:
+    app: pod-multi-interface
+    peer: b
+  ports:
+    - port: 8081
+      targetPort: 8081

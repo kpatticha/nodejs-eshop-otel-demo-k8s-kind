@@ -24,10 +24,13 @@ Helm chart.
 - `scripts/scenarios.sh` — apply/remove the optional metric scenarios
 - `scripts/churn.sh` — scale a deployment up and down to produce pod churn
 - `scripts/kill-pod.sh` — delete a pod and let its controller replace it
+- `scripts/multus.sh` — install/remove Multus, for pods with a second interface
+- `scripts/collector-interfaces.sh` — make kubeletstats report every pod interface
 - `services/frontend` — entry service (port 8080), calls the backend over HTTP
 - `services/backend` — product API (port 8081), includes a deliberately flaky
   endpoint to produce error traces and a CPU-bound one to move utilization
-- `services/loadgen` — steady traffic generator used by the `network` scenario
+- `services/loadgen` — steady traffic generator used by the `network` and
+  `pod-multi-interface` scenarios
 - `k8s/` — namespace + deployments/services, with the
   `instrumentation.opentelemetry.io/inject-nodejs` annotation already in place
 - `k8s/scenarios/` — optional workloads, one per metric shape (see

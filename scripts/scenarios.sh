@@ -62,8 +62,21 @@ ensure_image_proxy() {
 
 ensure_images_for() {
   case "$1" in
-    network|pod-churn) ensure_image_loadgen ;;
+    network|pod-churn|pod-multi-interface) ensure_image_loadgen ;;
     pod-multi-container) ensure_image_proxy ;;
+  esac
+}
+
+# A scenario can also need something from the cluster itself. pod-multi-interface
+# carries NetworkAttachmentDefinitions, so Multus has to be installed before the
+# manifest is applied or the apply fails on an unknown kind.
+ensure_prereqs_for() {
+  case "$1" in
+    pod-multi-interface)
+      ./scripts/multus.sh install
+      echo "    reminder: the second interface only reaches Elasticsearch after"
+      echo "    ./scripts/collector-interfaces.sh enable (see SCENARIOS.md)"
+      ;;
   esac
 }
 
@@ -121,6 +134,7 @@ case "$ACTION" in
     echo "==> Scenarios: $(echo "$SCENARIOS" | tr '\n' ' ')"
     for name in $SCENARIOS; do
       ensure_images_for "$name"
+      ensure_prereqs_for "$name"
     done
 
     kubectl apply -f k8s/namespace.yaml

@@ -75,6 +75,7 @@ kind delete cluster --name nodejs-eshop-otel-demo
 | `pod-churn` | Pod names that appear and disappear, and moving replica counts |
 | `pod-crashloop` | A pod in CrashLoopBackOff: rising restarts, gappy series |
 | `duplicate-pod-name` | The same pod name in two different namespaces |
+| `pod-multi-interface` | One pod with two network interfaces, traffic on both |
 
 ### `pod-with-limits`
 
@@ -182,6 +183,67 @@ produces numbers that are visibly wrong rather than plausibly wrong.
 This is also the only scenario that puts workloads outside the demo namespace, so it
 doubles as a check that the collectors are not namespace scoped. It creates
 `nodejs-eshop-otel-demo-2` on apply and deletes it again on delete.
+
+### `pod-multi-interface`
+
+A pod with more than one network interface. Every other scenario here produces
+`k8s.pod.network.io` documents with a single `attributes.interface` value, `eth0`, because
+that is all a normal pod has. This one gives two pods a second interface, `net1`, on a
+node-local bridge, and has them call each other over *both* — so one `k8s.pod.uid` carries
+two distinct interface values, each with receive and transmit bytes that keep climbing.
+
+Multi-homed pods are rare but real: Multus is standard in telco and NFV clusters, and
+turns up anywhere a workload needs a storage, management or provider network alongside the
+cluster one. Anything that treats a pod's network counters as a single series — a tile
+showing "the" network rate, a query that sums `k8s.pod.network.io` across documents —
+is right for every other pod here and wrong for this one.
+
+Unlike the rest, it needs two things from the cluster:
+
+```bash
+# 1. Multus, which is what gives a pod a second interface. It also drops the
+#    `bridge` and `static` CNI plugins on the node, which the kind image does
+#    not ship. scenarios.sh runs this for you; it is idempotent.
+./scripts/multus.sh install
+
+# 2. The collector. kubeletstats reports only the pod's *default* interface
+#    unless told otherwise, so without this the pods really do have two
+#    interfaces and the metrics still show one.
+./scripts/collector-interfaces.sh enable
+```
+
+Step 2 is the one to remember. It fails silently: everything rolls out, the pods really do
+have `net1` — `kubectl -n nodejs-eshop-otel-demo get pod -l app=pod-multi-interface -o
+jsonpath='{.items[*].metadata.annotations.k8s\.v1\.cni\.cncf\.io/network-status}'` shows
+both attachments — and the ES|QL query below still returns one interface per pod.
+The option (`collect_all_network_interfaces`) was added to the receiver in v0.125.0 and is
+off by default because it multiplies network series by the number of interfaces. Check with
+the query, not with `kubectl`. A `helm upgrade` of the kube-stack chart reverts the patch,
+so re-run it after one.
+
+The secondary network is a Linux bridge on the node, `multinic0` on `10.244.200.0/24`, with
+`isGateway` false — the default route stays on `eth0` and nothing about cluster networking
+changes. Each pod gets a static address, so traffic to `10.244.200.11`/`10.244.200.12`
+crosses `net1` while traffic to the same peer's Service name crosses `eth0`. Both pods are
+client and server on both interfaces, which is what keeps all four counters moving. Pod `b`
+is given more work than pod `a`, so the two are not interchangeable.
+
+The subnet has to sit inside the cluster CIDR (`10.244.0.0/16`). kind's masq-agent
+masquerades anything addressed outside it to the node's own IP, and a bridge-local
+conversation does not survive that — the SYN arrives from the node address and the
+connection hangs in `SYN_RECV`. `10.244.200.0/24` is inside the cluster CIDR and well clear
+of the `/24` the node hands to kindnet. The Deployments also use the `Recreate` strategy,
+because a rolling update would briefly run two pods claiming the same static address.
+
+If a pod stays in `ContainerCreating` with `failed to find plugin`, the CNI binaries did
+not make it onto the node — re-run `./scripts/multus.sh install` and check
+`docker exec nodejs-eshop-otel-demo-control-plane ls /opt/cni/bin`. If the pods are running
+but the load generator reports `ok=0` for the `10.244.200.*` targets, something is
+masquerading that subnet; `conntrack -L | grep 10.244.200` on the node shows it, as a reply
+tuple addressed to the node IP rather than to the peer.
+
+Removing the scenario leaves Multus and the collector setting in place. Undo those with
+`./scripts/multus.sh delete` and `./scripts/collector-interfaces.sh disable`.
 
 ## Verifying in Kibana
 
@@ -328,6 +390,43 @@ utilization figures for what is nominally the same pod name. Drop the `BY` claus
 the single row that comes back reports `namespaces = 2` — that is the merge to watch
 out for, and any view showing one tile for `duplicate-pod-name-0` is making it.
 
+**One pod, two interfaces** (`pod-multi-interface`)
+
+```esql
+FROM metrics-kubeletstatsreceiver.otel-*
+| WHERE resource.attributes.k8s.namespace.name == "nodejs-eshop-otel-demo"
+  AND TO_DOUBLE(k8s.pod.network.io) > 0
+| STATS interfaces = COUNT_DISTINCT(attributes.interface)
+    BY resource.attributes.k8s.pod.uid, resource.attributes.k8s.pod.name
+| WHERE interfaces >= 2
+```
+
+The two `pod-multi-interface-*` pods, and only those, with `interfaces = 2`. An empty
+result means the collector is still on its default: run
+`./scripts/collector-interfaces.sh status`.
+
+The `> 0` filter matters. Every pod netns carries a handful of idle tunnel devices
+(`tunl0`, `gre0`, `gretap0`, `sit0`, `ip6tnl0` and friends), and with the option enabled the
+kubelet reports all of them at zero bytes. Without the filter every pod in the cluster looks
+multi-homed. That is also the cardinality cost of the option: roughly eleven interfaces per
+pod, times two directions, where there used to be one.
+
+Then the counters themselves, four rows per pod:
+
+```esql
+FROM metrics-kubeletstatsreceiver.otel-*
+| WHERE resource.attributes.k8s.pod.name LIKE "pod-multi-interface-*"
+  AND TO_DOUBLE(k8s.pod.network.io) > 0
+| STATS bytes = MAX(TO_DOUBLE(k8s.pod.network.io))
+    BY resource.attributes.k8s.pod.uid, attributes.interface, attributes.direction
+| SORT resource.attributes.k8s.pod.uid, attributes.interface, attributes.direction
+```
+
+`eth0` and `net1`, each with a `receive` and a `transmit` row, all four non-trivial and
+growing between runs of the query. Drop `attributes.interface` from the `BY` clause and the
+two interfaces collapse into one number per direction — that is the mistake this scenario
+exists to catch.
+
 ## Adding a scenario
 
 Drop a manifest in [k8s/scenarios/](k8s/scenarios/). The script picks it up with no
@@ -347,6 +446,9 @@ make that work:
 
 If the scenario needs an image that is neither already in the repo nor pullable from a
 registry, add a case to `ensure_images_for` in [scripts/scenarios.sh](scripts/scenarios.sh).
+If it needs something installed in the cluster first, as `pod-multi-interface` needs Multus,
+add a case to `ensure_prereqs_for` in the same script — it runs before the manifest is
+applied.
 
 ## Sending extra traffic by hand
 

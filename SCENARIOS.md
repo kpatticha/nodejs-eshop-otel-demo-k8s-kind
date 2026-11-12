@@ -76,6 +76,7 @@ kind delete cluster --name nodejs-eshop-otel-demo
 | `pod-crashloop` | A pod in CrashLoopBackOff: rising restarts, gappy series |
 | `duplicate-pod-name` | The same pod name in two different namespaces |
 | `pod-multi-interface` | One pod with two network interfaces, traffic on both |
+| `many-deployments` | 10,000+ deployments at 0 replicas (own script, not in `scenarios.sh`) |
 
 ### `pod-with-limits`
 
@@ -244,6 +245,35 @@ tuple addressed to the node IP rather than to the peer.
 
 Removing the scenario leaves Multus and the collector setting in place. Undo those with
 `./scripts/multus.sh delete` and `./scripts/collector-interfaces.sh disable`.
+
+### `many-deployments`
+
+Just over 10,000 Deployments (default 10,050), for testing how a UI, a query or the ingest
+path copes with a cluster that has far more workloads than the demo ever does: a list that
+has to paginate or virtualise, a count that must not be capped at 10,000, a
+`COUNT_DISTINCT` over `k8s.deployment.name`.
+
+A kind node runs at most 110 pods, so these cannot have running pods. They are created at
+`replicas: 0`: real Deployment objects that the cluster receiver still reports
+(`k8s.deployment.desired` and `k8s.deployment.available`, both 0), with no pods. That makes
+it a test of *deployment* scale, not pod scale. Anything keyed on pods sees nothing new.
+
+This one is **not** in `scenarios.sh`, because `scenarios.sh apply` with no arguments applies
+every scenario and nobody should get 10,000 objects by accident. It has its own script and
+its own namespace, `many-deployments`:
+
+```bash
+./scripts/many-deployments.sh apply      # several minutes
+./scripts/many-deployments.sh status     # N deployments, 0 pods
+./scripts/many-deployments.sh delete     # deletes the namespace
+
+COUNT=2000 ./scripts/many-deployments.sh apply   # a smaller run
+```
+
+Expect extra load while it exists: the API server and the cluster-stats collector handle
+thousands of objects, and every collection interval writes a document per deployment per
+metric. Delete it when you are done. Deleting 10,000 deployments, and their ReplicaSets,
+takes a few minutes.
 
 ## Verifying in Kibana
 

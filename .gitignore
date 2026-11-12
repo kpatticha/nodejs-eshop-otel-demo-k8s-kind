@@ -1,0 +1,4 @@
+# EDOT credentials (see .env.edot.*.example)
+.env.edot
+.env.edot.local
+.env.edot.remote
